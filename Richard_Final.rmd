@@ -1,0 +1,409 @@
+---
+title: "HRichard Final Project Code"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+opts_knit$set(root.dir = normalizePath("../"))
+opts_chunk$set(echo = TRUE, tidy = TRUE)
+```
+
+# Set up R session
+```{r}
+setwd("C:/Users/heather.l.richard/OneDrive - University of Maine System/MultivariateStats/Richard_FinalProject/")
+```
+
+
+## Download packages 
+
+Install and load packages
+
+```{r warning=FALSE, message=FALSE}
+require(MVA)
+require(psych)
+require(Hmisc)
+require(vegan)
+require(StatMatch)
+require(MASS)
+require(tidyverse)
+require(dplyr)
+require(permute)
+```
+
+
+
+#	Ordination for overall variation
+You are going to conduct an ordination on the `MergedData` data collected by Heather Richard from various marsh soils along Maine's southern coast.This data set contains soil quality parameters such as total carbon, total nitrogen, extractable metals and variables that define where and when the sample was taken. Some if these we won't need, so we will have to clean things up. 
+
+
+```{r}
+
+Cdata<- read.csv("C:/Users/heather.l.richard/OneDrive - University of Maine System/MultivariateStats/Richard_FinalProject/MergedData.csv", row=1, header=TRUE)
+
+head(Cdata)
+```
+We need to clean the data and get just numeric data and decide how to transform the data to fit PCA assumptions. If we can't do that, we'll run an NMDS.
+
+```{r}
+clean <- Cdata[ -c(0,4,12:14,37:39,50:55,59:64) ] #get rid of unnecessary columns
+numdata<- clean[ -c(1:6,33:40,42) ] #get rid of non-numeric columns or use automated code e.g: numdata %>% select_if(negate(is.numeric))
+rownames(numdata) <- clean[,2]
+
+head(numdata)
+
+#get rid of the less than sign 
+numdata[,9:22] <- lapply(numdata[,9:22], function(s) as.numeric(gsub("[^-.0-9]", "", s)))
+
+#Remove rows missing data 
+data<-numdata[-c(129:147,191:199), ]
+head(data)
+```
+
+*In response to PC's Comments*
+## Run the mshapiro test
+This test is used to assess multivariate normality. If it shows that the data is not normal (indicated by a significant p value) we either have to transform it until it is normal, or use non-parametric tests. Any PCA's we run with non-normal data are for descriptive value only. The mardia test is for skewness and kurtosis, indicators of normality. Again, you *don't* want significant p-values if you are hoping to run a meaningful PCA.
+
+```{r}
+require(MVN)
+require(mvnormtest)
+
+#mshapiro.test(t(data)) 
+#this test won't run because of strongly correlated variables but I want to keep these variables in for a PCA or NMDS because it shouldn't impact the ordination. https://stats.stackexchange.com/questions/76488/error-system-is-computationally-singular-when-running-a-glm
+
+mvn(data, mvnTest = "mardia")
+
+```
+
+The results don't look great. But note: LOI_carbon is normal according to these tests, so I could later run univariate statistics specifically on this untransformed variable using parametric tests.
+
+Now we transform the data to see if we can pass the normality test for the rest of the variables.
+
+```{r}
+logdata <- log(data)
+names(logdata) <- paste0(names(data), "_log")
+newdata<-transform(merge(data, logdata,,by=0,all=TRUE), row.names=Row.names, Row.names=NULL)
+newdata2<-sort(colnames(newdata))
+newdata <- newdata[, newdata2]
+par(mfrow=c(1,2))
+for (col in 1:ncol(newdata)) {
+    hist(newdata[,col], main = names(newdata[col]))
+  
+}    
+```
+
+The log transformations seem to help with skewness and normality. Is it enough?
+```{r}
+#mshapiro.test(t(logdata))
+
+mvn(logdata, mvnTest = "mardia")
+```
+Thre results are only slightly better. 
+
+Next, apply a z-score standardization and test again. 
+
+```{r results='hide'}
+
+
+Zsoil<-scale(logdata)
+mvn(Zsoil, mvnTest = "mardia")
+
+```
+
+We can't get the assumptions for a PCA to apply, so let's run an NMDS
+
+# Running the NMDS
+```{r}
+carbon<-vegdist(Zsoil, "euclidian") 
+```
+#using euclidian distance because I have negative values
+
+You are going to use the metaMDS function in the vegan package. K = 2 because we are interested in only two dimensions (which is common for NMDS).
+
+```{r}
+?metaMDS
+
+nmdscarbon<-metaMDS(carbon,k=2, trace=T)
+stressplot(nmdscarbon)
+```
+
+## Interpretation 
+
+A stress value higher than 0.20 is unreliable. The best stress solution had a stress of around 0.105, which is a fair stress value just higher than good in terms of representation of the distance matrix. The R^2 is a measure of the goodness of fit and plots the distance of objects in the ordination against the original distances. An R2 of 1 would be a perfect fit, so an R2 of 0.989 for a non-metric fit is a pretty good fit. I'm not really sure what is causing the big jump in the dissimilarity plot.
+
+Now we will plot out our results and add some vectors using the envfit command.
+
+(code from [here.](https://stackoverflow.com/questions/64909804/how-to-add-environmental-vector-arrows-to-nmds-in-r)
+*Response to PC's comment on how to properly attribute code*
+Based on [this website]( https://www.reddit.com/r/AskProgramming/comments/qaf1lg/what_is_the_proper_procedure_to_citing_a/) stack overflow has a Creative Commons Share Alike license, so one can give credit however one feels appropriate.
+If I do have a DOI, I can use markdown syntax following [these instructions.](https://rstudio.github.io/visual-markdown-editing/citations.html#citations-from-dois) I have embedded links using proper formatting.
+
+```{r}
+plot(nmdscarbon)
+vectors<-envfit(nmdscarbon, Zsoil, add=TRUE)
+
+plot(vectors)
+```
+There's an outlier that's throwing everything off. Plots from later in the code show the sample is 121.
+
+## Get rid of the outlier row 121, I hit sand at that site (little river)
+```{r}
+
+Zsoil<-Zsoil[-c(121),]
+carbon<-vegdist(Zsoil, "euclidian") 
+
+nmdscarbon<-metaMDS(carbon,k=2, trace=T)
+stressplot(nmdscarbon)
+
+```
+#Stress is now 0.128
+
+```{r}
+plot(nmdscarbon)
+vectors<-envfit(nmdscarbon, Zsoil, add=TRUE)
+
+plot(vectors)
+```
+
+## Color samples by groups as per [this tutorial.](https://jkzorz.github.io/2020/04/04/NMDS-extras.html)
+
+```{r}
+#extract NMDS scores (x and y coordinates) for sites
+
+data.scores = as.data.frame(scores(nmdscarbon))
+vect.scrs <- as.data.frame(scores(vectors, display = "vectors"))
+
+
+#add 'group' column
+clean2<-clean[-c(121,129:147,191:199), ] #get rid of unnecessary/blank rows
+dataAB<-clean2 %>%            
+mutate(AB= ifelse(Pos >= 4, "Upstream", "Downstream")) #turn the Pos variable into upstream or downstream category
+dataAB<-dataAB %>% 
+  mutate(Restrict= ifelse(Site.y == "Libby" | Site.y=="LittleRivewr", "Control", "Restriction"))
+
+data.scores$Habitat = clean2$Habitat
+data.scores$AB = dataAB$AB
+data.scores$Depth = clean2$Depth
+data.scores$Site = clean2$Site.y
+data.scores$Sample_ID = clean2$Sample_ID
+data.scores$Restrict = dataAB$Restrict
+```
+
+*In response to editor comments I have added headings and titles to each graph*
+
+### Compare depth 
+
+```{r}
+library(ggplot2)
+
+gg = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, color=Depth)) + 
+     geom_point(data = data.scores, aes(colour = Depth), size = 3, alpha = 0.5) + 
+    scale_colour_manual(values = c("brown", "green")) + 
+     theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"), 
+     axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), 
+     legend.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     legend.text = element_text(size = 9, colour = "grey30")) +
+  stat_ellipse()+
+     labs(colour = "Depth")
+ 
+     
+gg + ggtitle("NMDS Compring Sample Depth")
+```
+Try separating by habitat and site
+```{r}
+gg+facet_grid(Habitat~Site) + ggtitle("NMDS Compring Sample Depth")
+```
+That code lacks tick marks to show x and y distance, so here's the same graph with scale. 
+
+```{r}
+gg = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, color=Depth)) + 
+     geom_point(data = data.scores, aes(colour = Depth), size = 3, alpha = 0.5) + 
+    scale_colour_manual(values = c("brown", "green")) + 
+     theme_bw() +
+  stat_ellipse()+
+     labs(colour = "Depth")
+ 
+     
+gg+facet_grid(Habitat~Site) + ggtitle("NMDS Compring Sample Depth")
+```
+## Compare upstream vs downstream
+
+```{r}
+gg = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, colour = AB)) + 
+     geom_point(data = data.scores, aes(colour = AB), size = 3, alpha = 0.5) + 
+     scale_colour_manual(values = c("orange", "steelblue")) + 
+     theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"), 
+     axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), 
+     legend.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     legend.text = element_text(size = 9, colour = "grey30")) +
+     labs(colour = "AB")+
+  stat_ellipse()+
+  geom_text(size=2, label=data.scores$Sample_ID, position=position_jitter(width=1,height=1))
+     
+gg+ ggtitle("NMDS Compring Upstream vs. Downstream Samples")
+```
+
+### Same graph, but looking at differences between sites and habitats
+
+```{r}
+gg = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, colour = AB)) + 
+     geom_point(data = data.scores, size = 3, aes(shape=Depth), alpha = 0.5) + 
+     scale_colour_manual(values = c("orange", "steelblue")) + 
+     theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"), 
+     axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), 
+     legend.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     legend.text = element_text(size = 9, colour = "grey30")) +
+  stat_ellipse()+
+     labs(colour = "Site")+
+  geom_text(size=2, label=data.scores$Sample_ID, position=position_jitter(width=1,height=1))
+     
+gg+facet_grid(Habitat~Site)+ ggtitle("NMDS Compring Upstream vs. Downstream Samples")
+```
+
+## Explore how low vs high marsh samples cluster
+
+```{r}
+gg = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, colour = Habitat)) + 
+     geom_point(data = data.scores, size = 3, aes(shape=Depth), alpha = 0.5) + 
+     #scale_colour_manual(values = c("orange", "steelblue")) + 
+     theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"), 
+     axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), 
+     legend.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     legend.text = element_text(size = 9, colour = "grey30")) +
+     labs(colour = "Habitat")+
+  stat_ellipse()+
+  geom_text(size=2, label=data.scores$Sample_ID, position=position_jitter(width=1,height=1))
+     
+gg+ ggtitle("NMDS Compring Low vs. High Marsh Samples")
+```
+
+## Compare restricted vs unrestricted sites
+
+```{r}
+gg = ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, colour = Restrict )) + 
+     geom_point(data = data.scores, aes(shape = AB), size = 3, alpha = 0.5) + 
+     scale_colour_manual(values = c("blue", "red")) + 
+     theme(axis.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     panel.background = element_blank(), panel.border = element_rect(fill = NA, colour = "grey30"), 
+     #axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_blank(), 
+     legend.title = element_text(size = 10, face = "bold", colour = "grey30"), 
+     legend.text = element_text(size = 9, colour = "grey30")) +
+     labs(colour = "Experimental Condition")+
+  stat_ellipse()+
+  geom_text(size=2, label=data.scores$Sample_ID, position=position_jitter(width=1,height=1))
+     
+gg+ ggtitle("Samples from Restricted vs Unrestricted Sites")
+```
+#### Just a reminder about what might be driving the shape of the data cloud.
+
+```{r}
+plot(nmdscarbon)
+plot(vectors, cex=0.75)
+```
+In general it seems that upstream has more extreme variation, especially in restricted sites. But are these patterns significant?
+
+It's important to reflect the experimental design in any PERMANOVA tests. What is my experimental design?
+
+![Marsh Sampling Design](C:/Users/heather.l.richard/OneDrive - University of Maine System/MultivariateStats/Richard_FinalProject/study_design.png)
+
+### PerMANOVA using the andonis function (Apr 21, 2024) ###
+Setting up the experimental variables
+```{r}
+habitat=as.matrix(clean2$Habitat)
+rownames(habitat)<-clean2[,2]
+
+depth=as.matrix(clean2$Depth)
+rownames(depth)<-clean2[,2]
+
+site=as.matrix(clean2$Site.y)
+rownames(site)<-clean2[,2]
+
+group=as.matrix(dataAB$AB)
+rownames(group)<-clean2[,2]
+
+Restrict=as.matrix(dataAB$Restrict) #set a parameter for the restricted vs unrestricted marsh sites
+rownames(Restrict)<-clean2[,2]
+```
+
+## Test: Within each marsh site, does habitat and depth matter?
+Helpful resources:[adonis with more levels of nestedness](https://www.researchgate.net/post/R-Script-for-adonis-with-more-levels-of-nestedness) and [this tutorial.](https://ichthyology.usm.edu/courses/multivariate/feb_7.pdf)
+
+The design has crossed variables, but if either habitat or depth don't matter, we can maybe combine samples so we have better statistical power. 
+```{r}
+
+set.seed(11) 
+
+permtest1<-adonis2(carbon ~ depth*habitat, strata=site, permutations = 9999, method = "euclidean")
+permtest1
+
+```
+Looks like habitat and depth matter, and there is a marginally significant difference. 
+
+That means I'm comparing 3 upstream and 3 downstream samples for each site by habitat by depth category. I was thinking about minimum t-test statistics when I designed this pilot study, not multivariate tests :-(
+
+*The primary question is: does the restriction category of the site interact with upstream vs downstream differences.So I'm thinking I need to do pairwise comparison to compare levels (above/below) within the group variable but taking into account habitat and depth variables. This will have to be a tomorrow problem...*
+
+# Ignore the rest, I will return to this issue late and may utilize some of this to guide me
+
+Using the permute package, I want to restrict the permutation so that sites, habitat and depth are separate, and then see how whether being restricted or not as a site makes a difference between upstream and downstream environment. [Source](https://uw.pressbooks.pub/appliedmultivariatestatistics/chapter/restricting-permutations/)
+
+```{r}
+
+CTRL<- how(within = Within(type = "free"),
+plots = Plots(strata = site, type = "none"),
+blocks = Restrict,
+nperm = 9999,
+observed = TRUE)
+
+set.seed(11) 
+
+adonis_data <- adonis2(carbon ~ 
+                       group*habitat*depth, 
+                       permutations = CTRL, method = "euclidean")
+
+        adonis_data
+
+        
+```
+
+After consulting chatGPT, this seems to be the one that includes all the variables appropriately (habitat and depth are secondary variables) and gets at the main question looking at differences above and below restrictions and the effect of restriction presence. 
+```{r}
+
+set.seed(11) 
+
+adonis_data <- adonis2(carbon ~ 
+                       Restrict*group*site+habitat:depth, strata=habitat,
+                       permutations = 9999, method = "euclidean")
+
+        adonis_data
+
+```
+Post hoc tests via https://www.researchgate.net/post/Posthoc_test_for_permanova_adonis
+```{r}
+?betadisper
+
+mod <- betadisper(carbon, site)
+TukeyHSD(mod)
+```
+
+#if the dispersion is different between groups, then examine
+```{r}
+plot(mod)
+```
+
+```{r}
+mod.HSD <- TukeyHSD(mod)
+mod.HSD
+plot(mod.HSD)
+```
+
+```
+
